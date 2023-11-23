@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaflet Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+    <style>
+        #map {
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+
+    <script>
+        console.log('starting');
+        // Initialize Leaflet map
+        const map = L.map('map').setView([48.8584, 2.2945], 4);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+        window.onerror = function (message, source, lineno, colno, error) {
+            console.error('Global error:', message);
+        };
+
+        //Arrays to store station data
+        let stations = [];
+        const sizes = [];
+        const sizeAvgs = [];
+        const sizeWavgs = [];
+
+        //Zoom levels to show certain station sizes.
+        const zoomS = 12;
+        const zoomM = 11;
+        const zoomL = 10;
+        const zoomXL = 0;
+
+        //Weights for calculating weighted averages
+        const sizeWeight = 0.5;
+        const sizeIcWeight = 0.75;
+        const sizeIcIntWeight = 1.25;
+
+        //Size categories for stations based on percentiles of total
+        const percS = 30;
+        const percM = 50;
+        const percL = 95;
+
+        //Initialise marker groups
+        const markersS = L.layerGroup();
+        const markersM = L.layerGroup();
+        const markersL = L.layerGroup();
+        const markersXL = L.layerGroup();
+
+        (async () => {
+            try {
+                console.log('getting data...');
+                await getData();
+
+                // Now stations array is populated with data
+                console.log(stations);
+
+                // Call mapStations after data is available
+                mapStations(stations);
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        })();
+
+        async function getData() {
+            const response = await fetch('station_sizes_edited.csv');
+            const data = await response.text();
+
+            const table = data.split('\n').slice(1);
+            table.forEach(row => {
+                const cols = row.split(',');
+                const id = cols[0];
+                const name = cols[1];
+                const lat = cols[2];
+                const lon = cols[3];
+                const db_id = cols[4];
+                const size = parseFloat(cols[5]);
+                const sizeIc = parseFloat(cols[6]);
+                const sizeIcInt = parseFloat(cols[7]);
+                const sizeAvg = (size + sizeIc + sizeIcInt) / 3;
+                const sizeWavg = (size * sizeWeight + sizeIc * sizeIcWeight + sizeIcInt * sizeIcIntWeight) / 3;
+
+                const station = {
+                    id: id,
+                    name: name,
+                    lat: lat,
+                    lon: lon,
+                    db_id: db_id,
+                    size: size,
+                    sizeIc: sizeIc,
+                    sizeIcInt: sizeIcInt,
+                    sizeAvg: sizeAvg,
+                    sizeWavg: sizeWavg,
+                    sizeCat: 'Unknown'
+                };
+
+                //Add station to the stations array
+                stations.push(station);
+
+                //Add normal and weighted average to respective arrays
+                sizeAvgs.push(sizeAvg);
+                sizeWavgs.push(sizeWavg);
+            });
+
+            //Arrays for storing the percentiles of station sizes
+            const percentilesAvg = calculatePercentiles(sizeAvgs);
+            const percentilesWavg = calculatePercentiles(sizeWavgs);
+
+            // Assign categories based on percentiles
+            stations.forEach(station => {
+                const sizePercentile = getPercentile(station.sizeWavg, percentilesWavg);
+
+                // console.log('Station ' + station.name + ' is in size percentile ' + sizePercentile + ' with a size avg of ' + station.sizeAvg);
+
+                // Define your category ranges based on percentiles
+                if (sizePercentile < percS) {
+                    station.sizeCat = 'S';
+                } else if (sizePercentile >= percS && sizePercentile < percM) {
+                    station.sizeCat = 'M';
+                } else if (sizePercentile >= percM && sizePercentile < percL) {
+                    station.sizeCat = 'L';
+                } else if (sizePercentile >= percL) {
+                    station.sizeCat = 'XL';
+                }
+            });
+        }
+
+        function calculatePercentiles(data) {
+            const sortedData = data.slice().sort((a, b) => a - b);
+            const percentiles = [percS, percM, percL];
+
+            return percentiles.map(percentile => {
+                const index = Math.ceil((percentile / 100) * sortedData.length) - 1;
+                console.log('sorted data: ' + sortedData[index]);
+                return sortedData[index];
+            });
+        }
+
+        function getPercentile(value, percentiles) {
+            if (value <= percentiles[0]) {
+                return 0;
+            } else if (value <= percentiles[1]) {
+                return percS;
+            } else if (value <= percentiles[2]) {
+                return percM;
+            } else {
+                return percL;
+            }
+        }
+
+        function mapStations(stations) {
+            // Create a marker cluster group
+            // const markersXS = L.layerGroup();
+
+
+            // markersXS.clearLayers();
+            markersS.clearLayers();
+            markersM.clearLayers();
+            markersL.clearLayers();
+            markersXL.clearLayers();
+
+            createMarkerLayers(stations, markersS, markersM, markersL, markersXL);
+
+
+            let currentZoom = map.getZoom();
+            console.log('Creating initial markers for zoom level: ' + currentZoom);
+
+            if (currentZoom >= zoomS) {
+                map.addLayer(markersS);
+            }
+
+            if (currentZoom >= zoomM) {
+                map.addLayer(markersM);
+            }
+
+            if (currentZoom >= zoomL) {
+                map.addLayer(markersL);
+            }
+
+            if (currentZoom >= zoomXL) {
+                map.addLayer(markersXL);
+            }
+
+            if (currentZoom <= zoomS) {
+                map.removeLayer(markersS);
+            }
+
+            if (currentZoom <= zoomM) {
+                map.removeLayer(markersM);
+            }
+
+            if (currentZoom <= zoomL) {
+                map.removeLayer(markersL);
+            }
+
+
+            // // Add markers to the cluster group
+            // stations.forEach(station => {
+            //     const marker = L.circleMarker([station.lat, station.lon], { radius: 5 });
+
+            //     // Customize marker based on sizeCat
+            //     marker.bindPopup(`Station: ${station.name}, Size: ${station.sizeCat}`);
+
+            //     markerCluster.addLayer(marker);
+            // });
+
+            // // Add the marker cluster group to the map
+            // map.addLayer(markerCluster);
+
+            // Define zoom level event listener
+            map.on('zoomend', function () {
+                currentZoom = map.getZoom();
+
+                console.log(currentZoom);
+
+                // if (currentZoom >= 11) {
+                //     map.addLayer(markersXS);
+                // }
+
+                // if (currentZoom < 11) {
+                //     map.removeLayer(markersXS);
+                // }
+
+                if (currentZoom >= zoomS) {
+                    map.addLayer(markersS);
+                }
+
+                if (currentZoom < zoomS) {
+                    map.removeLayer(markersS);
+                }
+
+                if (currentZoom >= zoomM) {
+                    map.addLayer(markersM);
+                }
+
+                if (currentZoom < zoomM) {
+                    map.removeLayer(markersM);
+                }
+
+                if (currentZoom >= zoomL) {
+                    map.addLayer(markersL);
+                }
+
+                if (currentZoom < zoomL) {
+                    map.removeLayer(markersL);
+                }
+
+                if (currentZoom < zoomXL) {
+                    map.addLayer(markersXL);
+                }
+            });
+        }
+
+        // Helper function to get station by LatLng
+        function getStationByLatLng(latlng, stations) {
+            return stations.find(station => station.lat === latlng.lat && station.lon === latlng.lng);
+        }
+
+        const radiusS = 5;
+        const radiusM = 6;
+        const radiusL = 7;
+        const radiusXL = 8;
+
+        function createMarkerLayers(stations, markersS, markersM, markersL, markersXL) {
+            stations.forEach(station => {
+                if (station.lat !== undefined && station.lon !== undefined) {
+
+                    // let marker;
+
+                    switch (station.sizeCat) {
+                        // case 'S':
+                        //     marker = L.circleMarker([station.lat, station.lon], { radius: 5 });
+
+                        //     // Customize marker based on sizeCat
+                        //     marker.bindPopup(`Station: ${station.name}, Size: ${station.sizeCat}`);
+
+                        //     markersXS.addLayer(marker);
+                        //     break;
+                        case 'S':
+                            marker = L.circleMarker([station.lat, station.lon], {
+                                radius: radiusS, fillColor: 'white',
+                                fillOpacity: 1.0
+                            });
+
+                            // Customize marker based on sizeCat
+                            marker.bindPopup(`Station: ${station.name}, Size: ${station.sizeCat}`);
+
+                            markersS.addLayer(marker);
+                            break;
+                        case 'M':
+                            marker = L.circleMarker([station.lat, station.lon], {
+                                radius: radiusM,
+                                fillColor: 'white',
+                                fillOpacity: 1.0
+                            });
+
+                            // Customize marker based on sizeCat
+                            marker.bindPopup(`Station: ${station.name}, Size: ${station.sizeCat}`);
+
+                            markersM.addLayer(marker);
+                            break;
+                        case 'L':
+                            marker = L.circleMarker([station.lat, station.lon], {
+                                radius: radiusL, fillColor: 'white',
+                                fillOpacity: 1.0
+                            });
+
+                            // Customize marker based on sizeCat
+                            marker.bindPopup(`Station: ${station.name}, Size: ${station.sizeCat}`);
+
+                            markersL.addLayer(marker);
+                            break;
+                        case 'XL':
+                            marker = L.circleMarker([station.lat, station.lon], {
+                                radius: radiusXL, fillColor: 'light blue',
+                                fillOpacity: 1.0
+                            });
+
+                            // Customize marker based on sizeCat
+                            marker.bindPopup(`Station: ${station.name}, Size: ${station.sizeCat}`);
+
+                            markersXL.addLayer(marker);
+                            break;
+                    }
+                }
+            })
+
+        }
+
+
+    </script>
+</body>
+
+</html>
