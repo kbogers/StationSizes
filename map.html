@@ -44,15 +44,15 @@
         const zoomL = 10;
         const zoomXL = 0;
 
-        //Weights for calculating weighted averages
-        const sizeWeight = 0.5;
-        const sizeIcWeight = 0.75;
-        const sizeIcIntWeight = 1.25;
+        //Weights for calculating weighted averages. The sum of these should be 3.
+        const sizeWeight = 0.5; //Weight of the total number of connections per station.
+        const sizeIcWeight = 0.75; //Weight of the number of intercity connections per station.
+        const sizeIcIntWeight = 1.75; //Weight of the number of international intercity connections per station.
 
         //Size categories for stations based on percentiles of total
-        const percS = 30;
-        const percM = 50;
-        const percL = 95;
+        const percS = 30; //everything below this percentile will be size S
+        const percM = 50; //everything below this percentile will be size M
+        const percL = 95; //everything below this percentile will be size L, everything above this will be size XL
 
         //Initialise marker groups
         const markersS = L.layerGroup();
